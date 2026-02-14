@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.jsonll.base.mapper.FinancialReportMapper">
+
+    <select id="dailyOrderIncomeByPayMethod" resultType="map">
+        SELECT COALESCE(pay_method, '现金') AS payMethod, COALESCE(SUM(total_amount), 0) AS amount
+        FROM order_main
+        WHERE deleted = 0 AND status IN ('已付款', '已完成')
+          AND DATE(order_time) = #{date}
+        GROUP BY pay_method
+    </select>
+
+    <select id="dailyRechargeIncomeByPayMethod" resultType="map">
+        SELECT COALESCE(pay_method, '现金') AS payMethod, COALESCE(SUM(pay_amount), 0) AS amount
+        FROM recharge_record
+        WHERE deleted = 0 AND DATE(create_time) = #{date}
+        GROUP BY pay_method
+    </select>
+
+    <select id="dailyPurchaseExpense" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(amount), 0) FROM purchase_record
+        WHERE deleted = 0 AND purchase_date = #{date}
+    </select>
+
+    <select id="dailyClaimExpense" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(COALESCE(final_amount, claim_amount, 0)), 0) FROM claim_record
+        WHERE deleted = 0 AND DATE(COALESCE(pay_time, create_time)) = #{date}
+    </select>
+
+    <select id="dailyOrderCount" resultType="long">
+        SELECT COUNT(*) FROM order_main
+        WHERE deleted = 0 AND status IN ('已付款', '已完成') AND DATE(order_time) = #{date}
+    </select>
+
+    <select id="dailyRechargeCount" resultType="long">
+        SELECT COUNT(*) FROM recharge_record WHERE deleted = 0 AND DATE(create_time) = #{date}
+    </select>
+
+    <!-- 月报：收入构成 = 订单(商品) + 充值 -->
+    <select id="monthlyIncomeBySubject" resultType="map">
+        SELECT '商品' AS subject, COALESCE(SUM(o.total_amount), 0) AS amount
+        FROM order_main o
+        WHERE o.deleted = 0 AND o.status IN ('已付款', '已完成')
+          AND YEAR(o.order_time) = #{year} AND MONTH(o.order_time) = #{month}
+        UNION ALL
+        SELECT '充值' AS subject, COALESCE(SUM(r.pay_amount), 0) AS amount
+        FROM recharge_record r
+        WHERE r.deleted = 0 AND YEAR(r.create_time) = #{year} AND MONTH(r.create_time) = #{month}
+    </select>
+
+    <select id="monthlyOrderCost" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(i.cost * i.quantity), 0)
+        FROM order_item i
+        INNER JOIN order_main o ON i.order_id = o.id AND o.deleted = 0
+        WHERE i.deleted = 0 AND o.status IN ('已付款', '已完成')
+          AND YEAR(o.order_time) = #{year} AND MONTH(o.order_time) = #{month}
+    </select>
+
+    <select id="monthlyPurchaseExpense" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(amount), 0) FROM purchase_record
+        WHERE deleted = 0 AND YEAR(purchase_date) = #{year} AND MONTH(purchase_date) = #{month}
+    </select>
+
+    <select id="monthlyClaimExpense" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(COALESCE(final_amount, claim_amount, 0)), 0) FROM claim_record
+        WHERE deleted = 0
+          AND YEAR(COALESCE(pay_time, create_time)) = #{year}
+          AND MONTH(COALESCE(pay_time, create_time)) = #{month}
+    </select>
+
+    <select id="monthlyTotalIncome" resultType="java.math.BigDecimal">
+        SELECT (SELECT COALESCE(SUM(total_amount), 0) FROM order_main
+                WHERE deleted = 0 AND status IN ('已付款', '已完成')
+                  AND YEAR(order_time) = #{year} AND MONTH(order_time) = #{month})
+             + (SELECT COALESCE(SUM(pay_amount), 0) FROM recharge_record
+                WHERE deleted = 0 AND YEAR(create_time) = #{year} AND MONTH(create_time) = #{month})
+    </select>
+
+    <select id="monthlyTotalIncomeLastYear" resultType="java.math.BigDecimal">
+        SELECT (SELECT COALESCE(SUM(total_amount), 0) FROM order_main
+                WHERE deleted = 0 AND status IN ('已付款', '已完成')
+                  AND YEAR(order_time) = #{year}-1 AND MONTH(order_time) = #{month})
+             + (SELECT COALESCE(SUM(pay_amount), 0) FROM recharge_record
+                WHERE deleted = 0 AND YEAR(create_time) = #{year}-1 AND MONTH(create_time) = #{month})
+    </select>
+
+    <select id="customTotalIncome" resultType="java.math.BigDecimal">
+        SELECT (SELECT COALESCE(SUM(total_amount), 0) FROM order_main
+                WHERE deleted = 0 AND status IN ('已付款', '已完成')
+                  AND DATE(order_time) BETWEEN #{startDate} AND #{endDate})
+             + (SELECT COALESCE(SUM(pay_amount), 0) FROM recharge_record
+                WHERE deleted = 0 AND DATE(create_time) BETWEEN #{startDate} AND #{endDate})
+    </select>
+
+    <select id="customTotalExpense" resultType="java.math.BigDecimal">
+        SELECT (SELECT COALESCE(SUM(amount), 0) FROM purchase_record
+                WHERE deleted = 0 AND purchase_date BETWEEN #{startDate} AND #{endDate})
+             + (SELECT COALESCE(SUM(COALESCE(final_amount, claim_amount, 0)), 0) FROM claim_record
+                WHERE deleted = 0 AND DATE(COALESCE(pay_time, create_time)) BETWEEN #{startDate} AND #{endDate})
+    </select>
+
+    <select id="customIncomeTrendByDay" resultType="map">
+        SELECT d.dt AS reportDate,
+               (SELECT COALESCE(SUM(o.total_amount), 0) FROM order_main o
+                WHERE o.deleted = 0 AND o.status IN ('已付款', '已完成') AND DATE(o.order_time) = d.dt)
+             + (SELECT COALESCE(SUM(r.pay_amount), 0) FROM recharge_record r
+                WHERE r.deleted = 0 AND DATE(r.create_time) = d.dt) AS amount
+        FROM (
+            SELECT DATE_ADD(#{startDate}, INTERVAL seq DAY) AS dt
+            FROM (SELECT a.N + b.N * 10 AS seq
+                  FROM (SELECT 0 AS N UNION SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4 UNION SELECT 5 UNION SELECT 6 UNION SELECT 7 UNION SELECT 8 UNION SELECT 9) a,
+                       (SELECT 0 AS N UNION SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4 UNION SELECT 5 UNION SELECT 6 UNION SELECT 7 UNION SELECT 8 UNION SELECT 9) b
+                ) t
+            WHERE DATE_ADD(#{startDate}, INTERVAL seq DAY) &lt;= #{endDate}
+        ) d
+        ORDER BY d.dt
+    </select>
+
+    <select id="topGoodsByAmount" resultType="map">
+        SELECT i.goods_name AS goodsName, COALESCE(SUM(i.amount), 0) AS amount
+        FROM order_item i
+        INNER JOIN order_main o ON i.order_id = o.id AND o.deleted = 0
+        WHERE i.deleted = 0 AND o.status IN ('已付款', '已完成')
+          AND DATE(o.order_time) BETWEEN #{startDate} AND #{endDate}
+        GROUP BY i.goods_id, i.goods_name
+        ORDER BY amount DESC
+        LIMIT #{limit}
+    </select>
+</mapper>
